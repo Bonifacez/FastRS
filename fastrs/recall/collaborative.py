@@ -87,8 +87,7 @@ class CollaborativeRecall(BaseRecall):
 
         # Zero out already seen
         for item_id in seen:
-            if item_id in self._item_index:
-                scores[self._item_index[item_id]] = 0.0
+            scores[self._item_index[item_id]] = 0.0
 
         k = min(top_k, len(scores))
         if k == 0:

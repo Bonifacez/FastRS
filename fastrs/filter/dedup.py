@@ -19,6 +19,6 @@ class DedupFilter(BaseFilter):
         for item in items:
             if item.item_id not in seen or item.score > seen[item.item_id].score:
                 seen[item.item_id] = item
-        # Preserve original order (first occurrence, highest score wins)
+        # Return items sorted by score descending (highest score wins per item_id)
         result = list(seen.values())
         return sorted(result, key=lambda x: x.score, reverse=True)

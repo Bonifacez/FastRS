@@ -31,6 +31,7 @@ class DataPipeline(BasePipeline):
         self.ranking_module = ranking_module
         self.filter_modules = filter_modules or []
         self.config = config or {}
+        self.over_fetch_factor: int = int(self.config.get("over_fetch_factor", 5))
 
     async def process(self, data: RecommendRequest) -> RecommendResponse:
         start = time.perf_counter()
@@ -42,7 +43,7 @@ class DataPipeline(BasePipeline):
             recalled = await self.recall_module.recall(
                 query=data.user_id,
                 context=data.context or {},
-                top_k=data.top_k * 5,  # Over-fetch for ranking/filtering
+                top_k=data.top_k * self.over_fetch_factor,  # Over-fetch for ranking/filtering
             )
             items = recalled
         else:

@@ -27,11 +27,13 @@ class RuleBasedRanking(BaseRanking):
         popularity_weight: float = 0.3,
         freshness_weight: float = 0.2,
         score_weight: float = 0.5,
+        freshness_decay_days: float = 30.0,
     ) -> None:
         self.name = name
         self.popularity_weight = popularity_weight
         self.freshness_weight = freshness_weight
         self.score_weight = score_weight
+        self.freshness_decay_days = freshness_decay_days
         self._popularity: Dict[str, float] = {}
 
     def set_popularity(self, item_id: str, popularity: float) -> None:
@@ -48,7 +50,7 @@ class RuleBasedRanking(BaseRanking):
         freshness = 1.0
         if item.metadata and "timestamp" in item.metadata:
             age_hours = (time.time() - item.metadata["timestamp"]) / 3600
-            freshness = max(0.0, 1.0 - age_hours / (24 * 30))  # Decay over 30 days
+            freshness = max(0.0, 1.0 - age_hours / (24 * self.freshness_decay_days))
         fresh_score = freshness * self.freshness_weight
 
         # Context boosts
