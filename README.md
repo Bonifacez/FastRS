@@ -90,6 +90,13 @@ fastrs/
 │   ├── engine.py         # Recommendation engine (recall→rank→filter)
 │   ├── registry.py       # Hot-pluggable module registry
 │   └── types.py          # Pydantic models & type definitions
+├── db/
+│   ├── postgres.py       # Async PostgreSQL (SQLAlchemy + asyncpg)
+│   └── redis.py          # Async Redis cache client
+├── mq/
+│   ├── base.py           # Abstract message queue interface
+│   ├── memory.py         # In-memory async queue (default)
+│   └── redis_stream.py   # Redis Streams queue (persistent)
 ├── pipeline/             # Data pipeline (loaders, transformers)
 ├── recall/               # Recall strategies (popularity, random)
 ├── ranking/              # Ranking strategies (passthrough, weighted)
@@ -113,6 +120,42 @@ All settings can be overridden via environment variables with the `FASTRS_` pref
 | `FASTRS_DEFAULT_RANK_TOP_K` | `50` | Ranked items count |
 | `FASTRS_DEFAULT_RESULT_TOP_K` | `10` | Final results count |
 | `FASTRS_MODEL_DIR` | `models_store` | Model storage directory |
+| `FASTRS_POSTGRES_DSN` | _(empty)_ | PostgreSQL DSN (e.g. `postgresql+asyncpg://user:pass@host/db`) |
+| `FASTRS_POSTGRES_POOL_SIZE` | `10` | PG connection pool size |
+| `FASTRS_REDIS_URL` | _(empty)_ | Redis URL (e.g. `redis://localhost:6379/0`) |
+| `FASTRS_REDIS_MAX_CONNECTIONS` | `20` | Redis pool max connections |
+
+## PostgreSQL & Redis
+
+Both services are **optional** — the server starts without them when DSN/URL are empty.
+
+```bash
+# Enable PostgreSQL
+export FASTRS_POSTGRES_DSN="postgresql+asyncpg://user:pass@localhost:5432/fastrs"
+
+# Enable Redis (cache + Redis Streams message queue)
+export FASTRS_REDIS_URL="redis://localhost:6379/0"
+
+fastrs serve
+```
+
+The `/readyz` endpoint reports the health of connected services:
+```json
+{"status": "ready", "postgres": "ok", "redis": "ok"}
+```
+
+## Message Queue
+
+FastRS ships with two MQ backends:
+
+| Backend | When used | Persistence | Dependencies |
+|---------|-----------|-------------|--------------|
+| `InMemoryMessageQueue` | `FASTRS_REDIS_URL` is empty (default) | In-process only | None |
+| `RedisStreamMessageQueue` | `FASTRS_REDIS_URL` is set | Yes (Redis Streams) | `redis` |
+
+The Redis Streams backend uses consumer groups (`XREADGROUP`) with acknowledgement
+(`XACK`), giving at-least-once delivery. Unlike Redis Pub/Sub, messages are **not lost**
+when no consumer is listening.
 
 ## License
 

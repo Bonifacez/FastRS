@@ -15,11 +15,16 @@ from fastrs.config import FastRSConfig, get_config
 from fastrs.core.engine import RecommendationEngine
 from fastrs.core.registry import ModuleRegistry
 from fastrs.core.types import ModuleType
+from fastrs.db.postgres import PostgresManager
+from fastrs.db.redis import RedisManager
 from fastrs.filter.rules import ExcludeItemsFilter
-from fastrs.log import setup_logging
+from fastrs.log import get_logger, setup_logging
 from fastrs.models.manager import ModelManager
+from fastrs.mq.memory import InMemoryMessageQueue
 from fastrs.ranking.score import PassThroughRanker
 from fastrs.recall.popular import PopularityRecall
+
+logger = get_logger(__name__)
 
 # -- dependency helpers (access via request.app.state) -------------------------
 
@@ -52,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     config: FastRSConfig = app.state.config
     setup_logging(level=config.log_level, fmt=config.log_format)
 
+    # -- core ------------------------------------------------------------------
     registry = ModuleRegistry()
     _register_defaults(registry)
 
@@ -59,7 +65,40 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.engine = RecommendationEngine(registry, config)
     app.state.model_manager = ModelManager(model_dir=config.model_dir)
 
+    # -- PostgreSQL (optional) -------------------------------------------------
+    pg = PostgresManager()
+    if config.postgres_dsn:
+        await pg.connect(
+            config.postgres_dsn,
+            pool_size=config.postgres_pool_size,
+            max_overflow=config.postgres_max_overflow,
+            echo=config.postgres_echo,
+        )
+    app.state.postgres = pg
+
+    # -- Redis (optional) ------------------------------------------------------
+    redis_mgr = RedisManager()
+    if config.redis_url:
+        await redis_mgr.connect(config.redis_url, max_connections=config.redis_max_connections)
+    app.state.redis = redis_mgr
+
+    # -- Message Queue ---------------------------------------------------------
+    if config.redis_url:
+        from fastrs.mq.redis_stream import RedisStreamMessageQueue
+
+        mq = RedisStreamMessageQueue(redis_mgr.client)
+        logger.info("mq_backend", backend="redis_stream")
+    else:
+        mq = InMemoryMessageQueue()
+        logger.info("mq_backend", backend="in_memory")
+    app.state.mq = mq
+
     yield
+
+    # -- teardown --------------------------------------------------------------
+    await mq.close()
+    await redis_mgr.disconnect()
+    await pg.disconnect()
 
 
 def create_app(config: FastRSConfig | None = None) -> FastAPI:
