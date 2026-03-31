@@ -26,6 +26,7 @@ class FastRSConfig(BaseSettings):
     # Logging
     log_level: str = "INFO"
     log_format: str = "json"
+    log_file: str = ""
 
     # Model storage
     model_dir: str = "models_store"
@@ -40,7 +41,28 @@ class FastRSConfig(BaseSettings):
     redis_url: str = ""
     redis_max_connections: int = Field(default=20, description="Max Redis pooled connections")
 
+    # Message queue
+    mq_backend: str = "auto"
+    mq_redis_group: str = "fastrs"
+    mq_redis_consumer: str = "worker-0"
 
-def get_config() -> FastRSConfig:
-    """Return a FastRSConfig instance (reads from env vars)."""
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings
+    ):
+        """Env vars take precedence over init kwargs (YAML values)."""
+        return (env_settings, init_settings, file_secret_settings)
+
+
+def get_config(config_path: str | None = None) -> FastRSConfig:
+    """Return a FastRSConfig instance.
+
+    If *config_path* is given, values are loaded from that YAML file (env vars
+    still override).
+    """
+    if config_path:
+        from fastrs.config_loader import load_yaml_config, yaml_to_fastrs_config
+
+        yaml_data = load_yaml_config(config_path)
+        return yaml_to_fastrs_config(yaml_data)
     return FastRSConfig()
