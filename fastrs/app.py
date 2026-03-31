@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI, Request
 from starlette.middleware.cors import CORSMiddleware
@@ -51,19 +52,77 @@ def _register_defaults(registry: ModuleRegistry) -> None:
     registry.register("exclude_items", ModuleType.FILTER, ExcludeItemsFilter(), description="Exclude items filter")
 
 
+def _register_modules_from_config(registry: ModuleRegistry, modules_config: dict[str, Any]) -> None:
+    """Instantiate and register modules from YAML config."""
+    from fastrs.config_loader import ModuleDefinition, resolve_class
+
+    type_mapping = {
+        "recall": ModuleType.RECALL,
+        "ranking": ModuleType.RANKING,
+        "filter": ModuleType.FILTER,
+    }
+    for section_name, module_type in type_mapping.items():
+        for entry in modules_config.get(section_name, []):
+            defn = ModuleDefinition.model_validate(entry)
+            cls = resolve_class(defn.class_ref)
+            instance = cls(**defn.params)
+            registry.register(defn.name, module_type, instance, description=defn.description)
+            if not defn.enabled:
+                registry.disable(defn.name)
+
+
+def _register_pipeline_from_config(registry: ModuleRegistry, pipeline_config: list[dict[str, Any]]) -> None:
+    """Instantiate and register pipeline stages from YAML config."""
+    from fastrs.config_loader import PipelineStageDefinition, resolve_class
+
+    for entry in pipeline_config:
+        defn = PipelineStageDefinition.model_validate(entry)
+        cls = resolve_class(defn.class_ref)
+        instance = cls(**defn.params)
+        registry.register(defn.name, ModuleType.PIPELINE, instance, description=defn.description)
+
+
+def _load_models_from_config(model_manager: ModelManager, models_config: list[dict[str, Any]]) -> None:
+    """Instantiate and register models from YAML config."""
+    from fastrs.config_loader import ModelDefinition, resolve_class
+
+    for entry in models_config:
+        defn = ModelDefinition.model_validate(entry)
+        cls = resolve_class(defn.class_ref)
+        model_instance = cls(**defn.params)
+        model_manager.register(defn.name, model_instance, version=defn.version)
+        if defn.path:
+            model_manager.load_model(defn.name, defn.path)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: setup and teardown."""
     config: FastRSConfig = app.state.config
-    setup_logging(level=config.log_level, fmt=config.log_format)
+    yaml_data: dict[str, Any] = getattr(app.state, "yaml_data", {})
+
+    setup_logging(level=config.log_level, fmt=config.log_format, log_file=config.log_file)
 
     # -- core ------------------------------------------------------------------
     registry = ModuleRegistry()
-    _register_defaults(registry)
+
+    # Register modules from YAML config or fall back to built-in defaults.
+    if "modules" in yaml_data:
+        _register_modules_from_config(registry, yaml_data["modules"])
+    else:
+        _register_defaults(registry)
+
+    # Register pipeline stages from YAML config.
+    if "pipeline" in yaml_data and yaml_data["pipeline"]:
+        _register_pipeline_from_config(registry, yaml_data["pipeline"])
 
     app.state.registry = registry
     app.state.engine = RecommendationEngine(registry, config)
     app.state.model_manager = ModelManager(model_dir=config.model_dir)
+
+    # Load models from YAML config.
+    if "models" in yaml_data and yaml_data["models"]:
+        _load_models_from_config(app.state.model_manager, yaml_data["models"])
 
     # -- PostgreSQL (optional) -------------------------------------------------
     pg = PostgresManager()
@@ -83,7 +142,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.redis = redis_mgr
 
     # -- Message Queue ---------------------------------------------------------
-    if config.redis_url:
+    use_redis_mq = config.mq_backend == "redis" or (config.mq_backend == "auto" and config.redis_url)
+    if use_redis_mq:
         from fastrs.mq.redis_stream import RedisStreamMessageQueue
 
         mq = RedisStreamMessageQueue(redis_mgr.client)
@@ -103,7 +163,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app(config: FastRSConfig | None = None) -> FastAPI:
     """Build and return the FastAPI application."""
-    config = config or get_config()
+    config_path = os.environ.get("FASTRS_CONFIG_FILE")
+
+    if config is None:
+        config = get_config(config_path)
+
+    # Load raw YAML data for module/pipeline/model definitions.
+    yaml_data: dict[str, Any] = {}
+    if config_path:
+        from fastrs.config_loader import load_yaml_config
+
+        yaml_data = load_yaml_config(config_path)
 
     app = FastAPI(
         title="FastRS",
@@ -112,6 +182,7 @@ def create_app(config: FastRSConfig | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.config = config
+    app.state.yaml_data = yaml_data
 
     # -- middleware ------------------------------------------------------------
     app.add_middleware(

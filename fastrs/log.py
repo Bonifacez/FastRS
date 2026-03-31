@@ -8,12 +8,14 @@ import sys
 import structlog
 
 
-def setup_logging(level: str = "INFO", fmt: str = "json") -> None:
+def setup_logging(level: str = "INFO", fmt: str = "json", log_file: str = "") -> None:
     """Configure structured logging for the application.
 
     Args:
         level: Log level string (DEBUG, INFO, WARNING, ERROR, CRITICAL).
         fmt: Output format - 'json' for JSON lines, 'console' for human-readable.
+        log_file: Optional path to a log file.  When set, logs are written to
+            both stdout and the specified file.
     """
     log_level = getattr(logging, level.upper(), logging.INFO)
 
@@ -55,6 +57,12 @@ def setup_logging(level: str = "INFO", fmt: str = "json") -> None:
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
+
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
+
     root.setLevel(log_level)
 
 
